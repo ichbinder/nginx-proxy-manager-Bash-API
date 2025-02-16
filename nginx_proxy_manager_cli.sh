@@ -4,7 +4,7 @@
 #   Github [ https://github.com/Erreur32/nginx-proxy-manager-Bash-API ]
 #   By Erreur32 - July 2024
 
-VERSION="2.5.9"
+VERSION="2.5.10"
 
 #
 # This script allows you to manage Nginx Proxy Manager via the API. It provides
@@ -100,6 +100,7 @@ NGINX_PORT="81"
 API_USER="user@nginx"
 API_PASS="pass nginx"
 BASE_DIR="/path/nginx_proxy_script/data"
+MACHINE_OUTPUT=false   # Added: Global flag for machine-readable output
 
 # Check if config file nginx_proxy_manager_cli.conf exist
 SCRIPT_DIR="$(dirname "$0")"
@@ -274,7 +275,8 @@ usage() {
   echo -e "  -w ALLOW_WEBSOCKET_UPGRADE              Allow WebSocket upgrade (true/false, default: $(colorize_boolean $ALLOW_WEBSOCKET_UPGRADE))"
   echo -e "  -l CUSTOM_LOCATIONS                     Custom locations (${COLOR_YELLOW}JSON array${CoR} of location objects)"
   echo -e "  -a ADVANCED_CONFIG                      Advanced configuration (${COLOR_YELLOW}string${CoR})"
-  echo ""
+  echo -e "  --machine                               Output results in machine-readable JSON format"  # Added new option
+  echo -e ""
   echo -e "  --info                                 ℹ️  ${COLOR_YELLOW}Display${CoR} Script Variables Information"
   echo -e "  --show-default                         🔍 ${COLOR_YELLOW}Show${CoR}    Default settings for creating hosts"
   echo -e "  --backup                               📦 ${COLOR_GREEN}Backup${CoR}  All configurations to a different files in \$BACKUP_DIR"
@@ -350,9 +352,22 @@ display_info() {
 
   check_dependencies
   check_nginx_access
-
+  
+  if [ "$MACHINE_OUTPUT" = true ]; then
+     info_json=$(jq -n \
+       --arg version "$VERSION" \
+       --arg base_dir "$BASE_DIR" \
+       --arg config_file "$CONFIG_FILE" \
+       --arg base_url "$BASE_URL" \
+       --arg nginx_ip "$NGINX_IP" \
+       --arg api_user "$API_USER" \
+       --arg backup_dir "$BACKUP_DIR" \
+       '{version: $version, base_dir: $base_dir, config_file: $config_file, base_url: $base_url, nginx_ip: $nginx_ip, api_user: $api_user, backup_dir: $backup_dir}')
+     echo "$info_json" | jq .
+     exit 0
+  fi
+  
   echo -e "\n${COLOR_YELLOW}Script Info:  ${COLOR_GREEN}${VERSION}${CoR}"
-
   echo -e "\n${COLOR_YELLOW}Script Variables Information:${CoR}"
   echo -e "  ${COLOR_GREEN}BASE_DIR${CoR}    ${BASE_DIR}"
   echo -e "  ${COLOR_YELLOW}Config${CoR}      ${BASE_DIR}/nginx_proxy_manager_cli.conf"
@@ -532,7 +547,7 @@ while getopts "d:i:p:f:c:b:w:a:l:y-:" opt; do
               BACKUP_HOST=true
               HOST_ID="${!OPTIND}"; shift
               ;;
-          backup-list)  BACKUP_LIST=true  ;;              
+          backup-list)  BACKUP_LIST=true  ;;
           restore-host)
               if [ -n "${!OPTIND}" ] && [[ "${!OPTIND}" != -* ]]; then
                 RESTORE_HOST=true
@@ -544,6 +559,7 @@ while getopts "d:i:p:f:c:b:w:a:l:y-:" opt; do
                 RESTORE_HOST=true
               fi
               ;;
+          machine) MACHINE_OUTPUT=true ;;  # Added: Set machine readable mode
           ssl-regenerate) validate_token; SSL_REGENERATE=true ;;
           ssl-restore) validate_token; SSL_RESTORE=true ;;
           create-user)
@@ -663,6 +679,17 @@ if [ $# -eq 0 ]; then
   display_info
   # usage
   exit 0
+fi
+
+# Disable colored output in machine-readable mode
+if [ "$MACHINE_OUTPUT" = true ]; then
+    COLOR_GREEN=""
+    COLOR_RED=""
+    COLOR_ORANGE=""
+    COLOR_YELLOW=""
+    CoR=""
+    COLOR_GREY=""
+    WHITE_ON_GREEN=""
 fi
 
 
@@ -1194,11 +1221,17 @@ pad() {
 
 # List all proxy hosts with basic details, including SSL certificate status and associated domain
 list_proxy_hosts() {
+  if [ "$MACHINE_OUTPUT" = true ]; then
+      RESPONSE=$(curl -s -X GET "$BASE_URL/nginx/proxy-hosts" -H "Authorization: Bearer $(cat $TOKEN_FILE)")
+      echo "$RESPONSE" | jq .
+      return
+  fi
+
   echo -e "\n${COLOR_ORANGE} 👉 List of proxy hosts (simple)${CoR}"
   printf "  %-6s %-36s %-9s %-4s %-36s\n" "ID" "Domain" "Status" "SSL" "Certificate Domain"
 
   RESPONSE=$(curl -s -X GET "$BASE_URL/nginx/proxy-hosts" \
-  -H "Authorization: Bearer $(cat $TOKEN_FILE)")
+    -H "Authorization: Bearer $(cat $TOKEN_FILE)")
 
   # Clean the response to remove control characters
   CLEANED_RESPONSE=$(echo "$RESPONSE" | tr -d '\000-\031')
@@ -1270,7 +1303,13 @@ search_proxy_host() {
     id=$(echo "$line" | jq -r '.id')
     domain_names=$(echo "$line" | jq -r '.domain_names[]')
 
-    echo -e " 🔎 id: ${COLOR_YELLOW}$id${CoR} ${COLOR_GREEN}$domain_names${CoR}"
+    if [ "$MACHINE_OUTPUT" = true ]; then # Machine output
+      RESPONSE=$(curl -s -X GET "$BASE_URL/nginx/proxy-hosts" -H "Authorization: Bearer $(cat $TOKEN_FILE)")
+      echo "$RESPONSE" | jq .
+      return
+    else # Human output
+      echo -e " 🔎 id: ${COLOR_YELLOW}$id${CoR} ${COLOR_GREEN}$domain_names${CoR}"
+    fi
   done
 	echo ""
 }
@@ -1357,7 +1396,7 @@ create_user() {
 
   echo "Data being sent: $DATA"  # Log the data being sent
 
-  HTTP_RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code}" -X POST "$BASE_URL/users" \
+ HTTP_RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code}" -X POST "$BASE_URL/nginx/certificates" \
   -H "Authorization: Bearer $(cat $TOKEN_FILE)" \
   -H "Content-Type: application/json; charset=UTF-8" \
   --data-raw "$DATA")
